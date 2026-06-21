@@ -140,9 +140,9 @@ index d40d0ec1..93f5388f 100644
 --- a/kernel/Makefile
 +++ b/kernel/Makefile
 @@ -24,4 +24,14 @@ format:
- check-format:
- 	find . \( -name "*.c" -o -name "*.h" \) -print0 | xargs -0 clang-format --dry-run --Werror
- 
+ ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
+ ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
+
 +## For susfs stuff ##
 +ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
 +$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
@@ -1118,7 +1118,7 @@ index 33df9d15..00f5e70b 100644
 @@ -61,6 +75,13 @@ static void __user *userspace_stack_buffer(const void *d, size_t len)
      return copy_to_user(p, d, len) ? NULL : p;
  }
- 
+
 +static char __user *sh_user_path(void)
 +{
 +    static const char sh_path[] = "/system/bin/sh";
@@ -1160,7 +1160,7 @@ index 33df9d15..00f5e70b 100644
 +		return compat_ptr(compat);
 +	}
 +#endif
- 
+
 -long ksu_handle_faccessat_sucompat(int orig_nr, struct pt_regs *regs)
 -{
 -    const char __user **filename_user, *orig_filename;
@@ -1168,7 +1168,7 @@ index 33df9d15..00f5e70b 100644
 -    const struct cred *old_cred;
 +	if (get_user(native, argv.ptr.native + nr))
 +		return ERR_PTR(-EFAULT);
- 
+
 -    if (!ksu_is_allow_uid_for_current(current_uid().val)) {
 -        goto do_orig_facessat;
 -    }
@@ -1176,7 +1176,7 @@ index 33df9d15..00f5e70b 100644
 -    filename_user = (const char __user **)&PT_REGS_PARM2(regs);
 +	return native;
 +}
- 
+
 -    char path[sizeof(su_path) + 1];
 -    memset(path, 0, sizeof(path));
 -    strncpy_from_user_nofault(path, *filename_user, sizeof(path));
@@ -1214,7 +1214,7 @@ index 33df9d15..00f5e70b 100644
 +            susfs_set_current_proc_umounted();
 +            return 0;
 +        }
- 
+
 -    if (unlikely(!memcmp(path, su_path, sizeof(su_path)))) {
 -        old_cred = override_creds(ksu_cred);
 -        if (is_ksud_exists()) {
@@ -1264,7 +1264,7 @@ index 33df9d15..00f5e70b 100644
 +
 +    if (unlikely(!filename_ptr))
 +        return 0;
- 
+
 -    if (!ksu_is_allow_uid_for_current(current_uid().val)) {
 -        goto do_orig_stat;
 +    filename = *filename_ptr;
@@ -1282,15 +1282,15 @@ index 33df9d15..00f5e70b 100644
 +        pr_err("ksu_handle_execveat_sucompat: su found but NOT allowed! Because current process is running in chrooted environment\n");
 +        return 0;
      }
- 
+
 -    filename_user = (const char __user **)&PT_REGS_PARM2(regs);
 +    pr_info("ksu_handle_execveat_sucompat: su found\n");
- 
+
 -    char path[sizeof(su_path) + 1];
 -    memset(path, 0, sizeof(path));
 -    strncpy_from_user_nofault(path, *filename_user, sizeof(path));
 +    memcpy((void *)filename->name, ksud_path, sizeof(ksud_path));
- 
+
 -    if (unlikely(!memcmp(path, su_path, sizeof(su_path)))) {
 -        old_cred = override_creds(ksu_cred);
 -        if (is_ksud_exists()) {
@@ -1410,7 +1410,7 @@ index 33df9d15..00f5e70b 100644
 +{
 +    if (unlikely(!filename_user))
 +        return 0;
- 
+
 -    fd_install(tmp_fd, ksud_file);
 -
 -    pending_sucompat = ksu_sulog_capture_sucompat(*filename_user, argv_user, GFP_KERNEL);
@@ -1427,14 +1427,14 @@ index 33df9d15..00f5e70b 100644
 -    regs->__PT_PARM2_REG = empty_user_path();
 -    regs->__PT_PARM1_REG = tmp_fd;
 +    char path[sizeof(su_path) + 1] = {0};
- 
+
 -    ret = escape_with_root_profile();
 -    if (ret) {
 -        pr_err("escape_with_root_profile failed: %ld\n", ret);
 -    }
 -    ksu_sulog_emit_pending(pending_sucompat, ret, GFP_KERNEL);
 +    strncpy_from_user(path, *filename_user, sizeof(path));
- 
+
 -    ret = ksu_syscall_table[__NR_execveat](regs);
 -    if (ret < 0) {
 -        ksu_close_fd(tmp_fd);
@@ -1616,7 +1616,7 @@ index f866a498..eb7ea937 100644
 --- a/kernel/hook/syscall_event_bridge.c
 +++ b/kernel/hook/syscall_event_bridge.c
 @@ -49,18 +49,36 @@ static int ksu_handle_init_mark_tracker(const char __user **filename_user)
- 
+
  long __nocfi ksu_hook_newfstatat(int orig_nr, const struct pt_regs *regs)
  {
 +    int *dfd;
@@ -1625,7 +1625,7 @@ index f866a498..eb7ea937 100644
 +
      if (!ksu_su_compat_enabled)
          return ksu_syscall_table[orig_nr](regs);
- 
+
 -    return ksu_handle_stat_sucompat(orig_nr, (struct pt_regs *)regs);
 +    dfd = (int *)&PT_REGS_PARM1(regs);
 +    filename_user = (const char __user **)&PT_REGS_PARM2(regs);
@@ -1634,7 +1634,7 @@ index f866a498..eb7ea937 100644
 +
 +    return ksu_syscall_table[orig_nr](regs);
  }
- 
+
  long __nocfi ksu_hook_faccessat(int orig_nr, const struct pt_regs *regs)
  {
 +    int *dfd;
@@ -1643,7 +1643,7 @@ index f866a498..eb7ea937 100644
 +
      if (!ksu_su_compat_enabled)
          return ksu_syscall_table[orig_nr](regs);
- 
+
 -    return ksu_handle_faccessat_sucompat(orig_nr, (struct pt_regs *)regs);
 +    dfd = (int *)&PT_REGS_PARM1(regs);
 +    filename_user = (const char __user **)&PT_REGS_PARM2(regs);
@@ -1652,7 +1652,7 @@ index f866a498..eb7ea937 100644
 +
 +    return ksu_syscall_table[orig_nr](regs);
  }
- 
+
  DEFINE_STATIC_KEY_TRUE(ksud_execve_key);
 @@ -91,7 +109,7 @@ long __nocfi ksu_hook_execve(int orig_nr, const struct pt_regs *regs)
              pr_err("adb root failed: %ld\n", ret);
@@ -1748,7 +1748,7 @@ index b85dbf97..695f2c1b 100644
      if (profile->flags & FLAG_KSU_NO_NEW_PRIVS) {
          set_thread_flag(TIF_KSU_DISABLE_ESCAPE_WITH_ROOT);
      }
- 
+
 -    for_each_thread (p, t) {
 -        ksu_set_task_tracepoint_flag(t);
 -    }
