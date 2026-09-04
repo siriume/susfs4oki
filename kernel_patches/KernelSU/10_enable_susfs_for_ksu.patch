@@ -151,13 +151,13 @@ index 88e22811..5c169f59 100644
 +endmenu
  
  endmenu
-diff --git a/kernel/Makefile b/kernel/Makefile
-index f3485588..14a40b61 100644
---- a/kernel/Makefile
-+++ b/kernel/Makefile
-@@ -33,4 +33,14 @@ format:
- check-format:
- 	find . \( -name "*.c" -o -name "*.h" \) -print0 | xargs -0 clang-format --dry-run --Werror
+diff --git a/kernel/Kbuild b/kernel/Kbuild
+index 28e5a3a8..63559d7e 100644
+--- a/kernel/Kbuild
++++ b/kernel/Kbuild
+@@ -150,4 +150,14 @@
+ ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
+ ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
  
 +## For susfs stuff ##
 +ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
@@ -1588,11 +1588,11 @@ index d3f3ac49..1f1e91be 100644
 -    // we rely on the fact that zygote always call setresuid(3) with same uids
 +    if (work_pending(&susfs_extra_works))
 +        return;
- 
+
 -    pr_info("handle_setresuid from %d to %d\n", old_uid, new_uid);
 +    schedule_work(&susfs_extra_works);
 +}
- 
+
 -    if (unlikely(is_uid_manager(new_uid))) {
 -        spin_lock_irq(&current->sighand->siglock);
 -        ksu_seccomp_allow_cache(current->seccomp.filter, __NR_reboot);
@@ -1605,7 +1605,7 @@ index d3f3ac49..1f1e91be 100644
 +        susfs_set_current_proc_umounted();
 +        goto do_umount;
 +    }
- 
+
 -        pr_info("install fd for manager: %d\n", new_uid);
 +    // - Since ksu maanger app uid is excluded in allow_list_arr, so ksu_uid_should_umount(manager_uid)
 +    //   will always return true, that's why we need to explicitly check if new_uid belongs to
@@ -1617,7 +1617,7 @@ index d3f3ac49..1f1e91be 100644
          ksu_install_fd();
          return 0;
      }
- 
+
 -    if (ksu_is_allow_uid_for_current(new_uid)) {
 -        if (current->seccomp.mode == SECCOMP_MODE_FILTER && current->seccomp.filter) {
 -            spin_lock_irq(&current->sighand->siglock);
@@ -1640,7 +1640,7 @@ index d3f3ac49..1f1e91be 100644
 +        disable_seccomp();
 +        return 0;
      }
- 
+
 -    // Handle kernel umount
 -    ksu_handle_umount(old_uid, new_uid);
 +    // Process not umounted but also root not allowed
@@ -1658,7 +1658,7 @@ index d3f3ac49..1f1e91be 100644
  
      return 0;
  }
- 
+
 +static int handle_zygote_next_setresuid(uid_t ruid) {
 +    // Check if spawned process is isolated service first, and force to do umount if so
 +    if (is_isolated_process(ruid)) {
